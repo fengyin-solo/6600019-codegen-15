@@ -29,3 +29,14 @@ export interface SeismicEvent {
   originTime: string
   location: string
 }
+
+export interface StationWaveform {
+  stationId: string
+  stationName: string
+  waveform: WaveformData
+  picks: PhasePick[]
+  distance?: number
+  azimuth?: number
+}
+
+export type ViewMode = 'single' | 'multi'

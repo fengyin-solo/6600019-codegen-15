@@ -3,25 +3,41 @@ import numpy as np
 from typing import List, Dict, Any
 
 
-def generate_mock_waveform(duration: int = 60, sr: int = 100) -> Dict[str, Any]:
+def generate_mock_waveform(duration: int = 60, sr: int = 100,
+                           p_delay: float = 10.0, s_delay: float = 22.0,
+                           amp_scale: float = 1.0) -> Dict[str, Any]:
     """Generate synthetic seismic waveform with P and S arrivals."""
     n = sr * duration
     t = np.linspace(0, duration, n)
 
-    # Background noise
     bhz = np.random.normal(0, 0.01, n)
     bhn = np.random.normal(0, 0.01, n)
     bhe = np.random.normal(0, 0.01, n)
 
-    # P-wave (t=10s, 8Hz)
-    p_mask = (t > 10) & (t < 18)
-    p_amp = 0.8 * np.exp(-((t[p_mask] - 12) ** 2) / 8)
-    bhz[p_mask] += p_amp * np.sin(2 * np.pi * 8 * t[p_mask])
+    p_amp = 0.8 * amp_scale
+    p_mask = (t > p_delay) & (t < p_delay + 8)
+    if np.any(p_mask):
+        p_env = p_amp * np.exp(-((t[p_mask] - p_delay - 2) ** 2) / 8)
+        bhz[p_mask] += p_env * np.sin(2 * np.pi * 8 * t[p_mask])
+        bhn[p_mask] += p_env * 0.3 * np.sin(2 * np.pi * 8 * t[p_mask] + 0.5)
+        bhe[p_mask] += p_env * 0.3 * np.sin(2 * np.pi * 8 * t[p_mask] + 1.0)
 
-    # S-wave (t=22s, 4Hz)
-    s_mask = (t > 22) & (t < 40)
-    s_amp = 1.5 * np.exp(-((t[s_mask] - 28) ** 2) / 30)
-    bhe[s_mask] += s_amp * np.sin(2 * np.pi * 4 * t[s_mask])
+    s_amp = 1.5 * amp_scale
+    s_mask = (t > s_delay) & (t < s_delay + 18)
+    if np.any(s_mask):
+        s_env = s_amp * np.exp(-((t[s_mask] - s_delay - 6) ** 2) / 30)
+        bhz[s_mask] += s_env * 0.4 * np.sin(2 * np.pi * 4 * t[s_mask])
+        bhn[s_mask] += s_env * np.sin(2 * np.pi * 4 * t[s_mask] + 0.3)
+        bhe[s_mask] += s_env * np.sin(2 * np.pi * 4 * t[s_mask] + 0.8)
+
+    surf_amp = 2.0 * amp_scale
+    surf_delay = s_delay + 13
+    surf_mask = (t > surf_delay) & (t < surf_delay + 20)
+    if np.any(surf_mask):
+        surf_env = surf_amp * np.exp(-((t[surf_mask] - surf_delay - 7) ** 2) / 50)
+        bhz[surf_mask] += surf_env * np.sin(2 * np.pi * 1.5 * t[surf_mask])
+        bhn[surf_mask] += surf_env * np.sin(2 * np.pi * 1.5 * t[surf_mask] + 0.4)
+        bhe[surf_mask] += surf_env * np.sin(2 * np.pi * 1.5 * t[surf_mask] + 0.9)
 
     return {
         "time": t.tolist(),
@@ -40,12 +56,10 @@ def sta_lta_pick(data: List[float], sr: int,
     sta_len = int(sta_sec * sr)
     lta_len = int(lta_sec * sr)
 
-    # Compute STA/LTA ratio
     sq = arr ** 2
     sta = np.convolve(sq, np.ones(sta_len) / sta_len, mode='valid')
     lta = np.convolve(sq, np.ones(lta_len) / lta_len, mode='valid')
 
-    # Align lengths
     min_len = min(len(sta), len(lta))
     sta = sta[:min_len]
     lta = lta[:min_len]
@@ -79,3 +93,36 @@ def process_waveform(file_bytes: bytes, filename: str) -> Dict[str, Any]:
     waveform = generate_mock_waveform()
     picks = sta_lta_pick(waveform["bhz"], waveform["samplingRate"])
     return {"waveform": waveform, "picks": picks}
+
+
+def generate_multi_station_waveforms(event_id: str) -> Dict[str, Any]:
+    """Generate multi-station waveform data for a seismic event."""
+    station_configs = [
+        {"stationId": "STA01", "stationName": "BJI", "pDelay": 8, "sDelay": 18, "ampScale": 1.2, "distance": 150},
+        {"stationId": "STA02", "stationName": "SSE", "pDelay": 12, "sDelay": 26, "ampScale": 0.9, "distance": 280},
+        {"stationId": "STA03", "stationName": "KMI", "pDelay": 15, "sDelay": 32, "ampScale": 0.7, "distance": 420},
+        {"stationId": "STA04", "stationName": "HIA", "pDelay": 6, "sDelay": 14, "ampScale": 1.4, "distance": 90},
+    ]
+
+    event_offset = int(event_id) * 2 if event_id.isdigit() else 0
+
+    station_waveforms = []
+    for config in station_configs:
+        wf = generate_mock_waveform(
+            p_delay=config["pDelay"] + event_offset,
+            s_delay=config["sDelay"] + event_offset,
+            amp_scale=config["ampScale"]
+        )
+        picks = sta_lta_pick(wf["bhz"], wf["samplingRate"])
+        station_waveforms.append({
+            "stationId": config["stationId"],
+            "stationName": config["stationName"],
+            "waveform": wf,
+            "picks": picks,
+            "distance": config["distance"],
+        })
+
+    return {
+        "eventId": event_id,
+        "stationWaveforms": station_waveforms,
+    }
