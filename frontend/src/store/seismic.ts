@@ -1,6 +1,41 @@
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { defineStore } from 'pinia'
 import type { WaveformData, PhasePick, Station, SeismicEvent, StationWaveform, ViewMode } from '../types'
+
+const STORAGE_KEY = 'seismic-store-persist-v1'
+
+interface PersistedState {
+  viewMode: ViewMode
+  selectedEventId: string | null
+  selectedStationIds: string[]
+  staWindow: number
+  ltaWindow: number
+  threshold: number
+  stationWaveforms: StationWaveform[]
+  waveform: WaveformData | null
+  picks: PhasePick[]
+}
+
+function saveToStorage(state: Partial<PersistedState>) {
+  try {
+    const existing = localStorage.getItem(STORAGE_KEY)
+    const current: Partial<PersistedState> = existing ? JSON.parse(existing) : {}
+    const merged = { ...current, ...state }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(merged))
+  } catch (e) {
+    console.warn('Failed to persist seismic state:', e)
+  }
+}
+
+function loadFromStorage(): Partial<PersistedState> | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch (e) {
+    console.warn('Failed to restore seismic state:', e)
+    return null
+  }
+}
 
 export const useSeismicStore = defineStore('seismic', () => {
   const waveform = ref<WaveformData | null>(null)
@@ -31,6 +66,26 @@ export const useSeismicStore = defineStore('seismic', () => {
   const selectedStationWaveforms = computed(() => {
     return stationWaveforms.value.filter(sw => selectedStationIds.value.includes(sw.stationId))
   })
+
+  function restoreFromStorage() {
+    const saved = loadFromStorage()
+    if (!saved) return
+
+    if (saved.viewMode) viewMode.value = saved.viewMode
+    if (saved.staWindow !== undefined) staWindow.value = saved.staWindow
+    if (saved.ltaWindow !== undefined) ltaWindow.value = saved.ltaWindow
+    if (saved.threshold !== undefined) threshold.value = saved.threshold
+    if (saved.selectedStationIds) selectedStationIds.value = saved.selectedStationIds
+    if (saved.stationWaveforms && saved.stationWaveforms.length > 0) {
+      stationWaveforms.value = saved.stationWaveforms
+    }
+    if (saved.waveform) waveform.value = saved.waveform
+    if (saved.picks && saved.picks.length > 0) picks.value = saved.picks
+    if (saved.selectedEventId) {
+      const event = events.value.find(e => e.id === saved.selectedEventId)
+      if (event) selectedEvent.value = event
+    }
+  }
 
   function generateMockWaveform(pDelay: number = 10, sDelay: number = 22, ampScale: number = 1): WaveformData {
     const sr = 100
@@ -119,6 +174,7 @@ export const useSeismicStore = defineStore('seismic', () => {
       { id: 'p1', type: 'P', time: 10.2, confidence: 0.92, method: 'STA/LTA' },
       { id: 'p2', type: 'S', time: 22.5, confidence: 0.88, method: 'STA/LTA' },
     ]
+    saveToStorage({ waveform: waveform.value, picks: picks.value })
   }
 
   function loadMultiStationMockData(eventId: string) {
@@ -154,6 +210,12 @@ export const useSeismicStore = defineStore('seismic', () => {
     if (selectedStationIds.value.length === 0) {
       selectedStationIds.value = stationWaveforms.value.slice(0, 3).map(s => s.stationId)
     }
+
+    saveToStorage({
+      selectedEventId: eventId,
+      stationWaveforms: stationWaveforms.value,
+      selectedStationIds: selectedStationIds.value
+    })
   }
 
   function toggleStationSelection(stationId: string) {
@@ -163,6 +225,7 @@ export const useSeismicStore = defineStore('seismic', () => {
     } else {
       selectedStationIds.value.push(stationId)
     }
+    saveToStorage({ selectedStationIds: selectedStationIds.value })
   }
 
   function runMultiStationPick() {
@@ -170,6 +233,7 @@ export const useSeismicStore = defineStore('seismic', () => {
       ...sw,
       picks: staLtaPickingOnWaveform(sw.waveform)
     }))
+    saveToStorage({ stationWaveforms: stationWaveforms.value })
   }
 
   function staLtaPicking(): PhasePick[] {
@@ -218,6 +282,7 @@ export const useSeismicStore = defineStore('seismic', () => {
         const data = await resp.json()
         waveform.value = data.waveform
         picks.value = data.picks || []
+        saveToStorage({ waveform: waveform.value, picks: picks.value })
       }
     } catch {
       loadMockData()
@@ -226,12 +291,21 @@ export const useSeismicStore = defineStore('seismic', () => {
     }
   }
 
+  watch(viewMode, (val) => saveToStorage({ viewMode: val }))
+  watch(staWindow, (val) => saveToStorage({ staWindow: val }))
+  watch(ltaWindow, (val) => saveToStorage({ ltaWindow: val }))
+  watch(threshold, (val) => saveToStorage({ threshold: val }))
+  watch(picks, (val) => saveToStorage({ picks: val }), { deep: true })
+  watch(waveform, (val) => saveToStorage({ waveform: val }), { deep: true })
+
+  restoreFromStorage()
+
   return {
     waveform, picks, selectedStation, staWindow, ltaWindow, threshold,
     isLoading, events, stations, viewMode, selectedEvent,
     selectedStationIds, stationWaveforms, selectedStationWaveforms,
     loadMockData, staLtaPicking, uploadAndAnalyze, generateMockWaveform,
     loadMultiStationMockData, toggleStationSelection, runMultiStationPick,
-    staLtaPickingOnWaveform
+    staLtaPickingOnWaveform, restoreFromStorage
   }
 })
